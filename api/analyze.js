@@ -36,9 +36,7 @@ export default async function handler(req, res) {
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          // ⚡ Sonnet 4.6 (최신, 같은 가격, 더 똑똑함, 1M 컨텍스트)
           model: 'claude-sonnet-4-5',
-          // ⚡ 16000으로 늘림 (응답 잘림 방지)
           max_tokens: 16000,
           messages: [{
             role: 'user',
@@ -59,12 +57,13 @@ export default async function handler(req, res) {
     }
   }
 
-  /* ── GPT-4o-mini 폴백 (TPM 한도 넉넉, 저렴) ── */
+  /* ── GPT-4o 폴백 (Tier 1 TPM 30K 안전, 품질 우수) ── */
   if (openaiKey) {
     try {
-      console.log('GPT-4o-mini 호출 시작...');
-      const trimText = (pdfText||'').length > 38000
-        ? pdfText.slice(0, 38000) + '\n...(이하 생략)'
+      console.log('GPT-4o 호출 시작...');
+      // ⚡ 텍스트 18000자로 제한 → 입력 토큰 ~22K → TPM 30K 안에 안전
+      const trimText = (pdfText||'').length > 18000
+        ? pdfText.slice(0, 18000) + '\n...(이하 생략)'
         : (pdfText||'');
 
       if (!trimText || trimText.length < 200) {
@@ -82,12 +81,13 @@ export default async function handler(req, res) {
           'Authorization': `Bearer ${openaiKey}`,
         },
         body: JSON.stringify({
-          // ⚡ gpt-4o-mini로 변경 (TPM 한도 큼, 비용 1/10, 품질 충분)
-          model: 'gpt-4o-mini',
-          max_tokens: 16000,
+          // ⚡ gpt-4o 복귀 (품질 회복)
+          model: 'gpt-4o',
+          // ⚡ 8000 (TPM 안전 + 응답 충분)
+          max_tokens: 8000,
           temperature: 0.2,
           messages: [
-            { role: 'system', content: '당신은 대한민국 최상위 입학사정관이자 생기부 전문컨설턴트입니다. 제공된 학생부 원문을 빠짐없이 분析하세요. JSON만 반환. 마크다운 금지.' },
+            { role: 'system', content: '당신은 대한민국 최상위 입학사정관이자 생기부 전문컨설턴트입니다. 제공된 학생부 원문을 빠짐없이 분析하세요. 모든 필드를 구체적이고 풍부하게 작성하세요. JSON만 반환. 마크다운 금지.' },
             { role: 'user', content: fullPrompt }
           ],
           response_format: { type: 'json_object' }
@@ -111,8 +111,7 @@ export default async function handler(req, res) {
           if (!json.schoolName && localParsed.studentInfo?.school) {
             json.schoolName = localParsed.studentInfo.school;
           }
-          // grades, achievementSubjects는 더 이상 덮어쓰지 않음
-          // GPT가 PDF 원문 보고 직접 추출한 게 정확하므로
+          // grades, achievementSubjects는 더 이상 덮어쓰지 않음 (GPT 결과 신뢰)
           text = JSON.stringify(json);
         } catch(e) { console.warn('JSON 보강 실패:', e.message); }
       }
