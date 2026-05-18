@@ -59,16 +59,14 @@ export default async function handler(req, res) {
     }
   }
 
-  /* ── GPT-4o 폴백 ── */
+  /* ── GPT-4o-mini 폴백 (TPM 한도 넉넉, 저렴) ── */
   if (openaiKey) {
     try {
-      console.log('GPT-4o 호출 시작...');
+      console.log('GPT-4o-mini 호출 시작...');
       const trimText = (pdfText||'').length > 38000
         ? pdfText.slice(0, 38000) + '\n...(이하 생략)'
         : (pdfText||'');
 
-      // ⚡ 텍스트 추출 실패해도 GPT한테 prompt만이라도 보내기 (이미지 PDF 대응)
-      // 단, GPT는 PDF base64 직접 못 받으니 텍스트 없으면 안내만
       if (!trimText || trimText.length < 200) {
         return res.status(400).json({
           error: 'PDF 텍스트 추출 실패 — 스캔본이거나 보안 설정된 PDF입니다. 한글파일(.hwp)을 PDF로 다시 출력하거나, NEIS에서 텍스트 추출 가능한 형식으로 받아주세요.'
@@ -84,7 +82,8 @@ export default async function handler(req, res) {
           'Authorization': `Bearer ${openaiKey}`,
         },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          // ⚡ gpt-4o-mini로 변경 (TPM 한도 큼, 비용 1/10, 품질 충분)
+          model: 'gpt-4o-mini',
           max_tokens: 16000,
           temperature: 0.2,
           messages: [
@@ -102,20 +101,18 @@ export default async function handler(req, res) {
 
       let text = d.choices?.[0]?.message?.content || '{}';
 
-      // ⚡ 변경: 로컬파서 덮어쓰기 제거 (GPT가 추출한 게 더 정확함)
-      // 보조 필드만 채우기 (학교명, 평균등급)
+      // 보조 필드만 비어있을 때 채움 (학교명, 평균등급)
       if (localParsed) {
         try {
           let json = JSON.parse(text);
-          // GPT가 비워둔 경우에만 보강
           if (!json.gradeAvg || json.gradeAvg === '0' || json.gradeAvg === '') {
             if (localParsed.gradeAvg) json.gradeAvg = localParsed.gradeAvg;
           }
           if (!json.schoolName && localParsed.studentInfo?.school) {
             json.schoolName = localParsed.studentInfo.school;
           }
-          // ⚠️ grades, achievementSubjects는 더 이상 덮어쓰지 않음
-          //    GPT가 PDF 원문 보고 직접 추출한 게 정확하므로
+          // grades, achievementSubjects는 더 이상 덮어쓰지 않음
+          // GPT가 PDF 원문 보고 직접 추출한 게 정확하므로
           text = JSON.stringify(json);
         } catch(e) { console.warn('JSON 보강 실패:', e.message); }
       }
