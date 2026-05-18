@@ -24,7 +24,7 @@ export default async function handler(req, res) {
 
   console.log(`요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB, pdfText=${Math.round((pdfText||'').length/1024)}KB`);
 
-  /* ── Claude 우선 ── */
+  /* ── Claude 우선 (키 있으면) ── */
   if (anthropicKey) {
     try {
       console.log('Claude API 호출 시작...');
@@ -57,13 +57,13 @@ export default async function handler(req, res) {
     }
   }
 
-  /* ── GPT-4o 폴백 (Tier 1 TPM 30K 안전, 품질 우수) ── */
+  /* ── GPT-4o 본 호출 ── */
   if (openaiKey) {
     try {
       console.log('GPT-4o 호출 시작...');
-      // ⚡ 텍스트 18000자로 제한 → 입력 토큰 ~22K → TPM 30K 안에 안전
-      const trimText = (pdfText||'').length > 18000
-        ? pdfText.slice(0, 18000) + '\n...(이하 생략)'
+      // ⚡ 텍스트 15000자로 제한 → 입력 토큰 ~18K + 출력 12K = 30K (Tier 1 한도 안)
+      const trimText = (pdfText||'').length > 15000
+        ? pdfText.slice(0, 15000) + '\n...(이하 생략)'
         : (pdfText||'');
 
       if (!trimText || trimText.length < 200) {
@@ -72,7 +72,7 @@ export default async function handler(req, res) {
         });
       }
 
-      const fullPrompt = `=== 학생부 원문 (PDF 추출) ===\n${trimText}\n\n=== 분析 지시 ===\n${prompt}`;
+      const fullPrompt = `=== 학생부 원문 (PDF 추출) ===\n${trimText}\n\n=== 분석 지시 ===\n${prompt}`;
 
       const r = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -81,13 +81,15 @@ export default async function handler(req, res) {
           'Authorization': `Bearer ${openaiKey}`,
         },
         body: JSON.stringify({
-          // ⚡ gpt-4o 복귀 (품질 회복)
           model: 'gpt-4o',
-          // ⚡ 8000 (TPM 안전 + 응답 충분)
-          max_tokens: 8000,
-          temperature: 0.2,
+          // ⚡ 12000으로 늘림 (답변 잘림 방지) — 분량 강제 프롬프트와 짝
+          max_tokens: 12000,
+          temperature: 0.3,
           messages: [
-            { role: 'system', content: '당신은 대한민국 최상위 입학사정관이자 생기부 전문컨설턴트입니다. 제공된 학생부 원문을 빠짐없이 분析하세요. 모든 필드를 구체적이고 풍부하게 작성하세요. JSON만 반환. 마크다운 금지.' },
+            { 
+              role: 'system', 
+              content: '당신은 대한민국 최상위 입학사정관이자 생기부 전문컨설턴트입니다. ⚠️ 모든 필드를 빠짐없이 풍부하게 작성하세요. 빈 배열이나 짧은 답변은 절대 금지. 각 필드의 최소 분량 지시를 반드시 지키세요. JSON만 반환. 마크다운 금지.' 
+            },
             { role: 'user', content: fullPrompt }
           ],
           response_format: { type: 'json_object' }
@@ -111,10 +113,22 @@ export default async function handler(req, res) {
           if (!json.schoolName && localParsed.studentInfo?.school) {
             json.schoolName = localParsed.studentInfo.school;
           }
-          // grades, achievementSubjects는 더 이상 덮어쓰지 않음 (GPT 결과 신뢰)
+          // grades/activities가 너무 적으면 로컬 파서로 보강
+          if ((!json.grades || json.grades.length < 4) && localParsed.grades?.length > 0) {
+            json.grades = localParsed.grades;
+          }
+          if ((!json.achievementSubjects || json.achievementSubjects.length === 0) && localParsed.achievementSubjects?.length > 0) {
+            json.achievementSubjects = localParsed.achievementSubjects;
+          }
           text = JSON.stringify(json);
         } catch(e) { console.warn('JSON 보강 실패:', e.message); }
       }
+
+      // 로그: 응답 분량 확인 (디버깅용)
+      try {
+        const j = JSON.parse(text);
+        console.log(`응답 분량: grades=${j.grades?.length||0}, activities=${j.activities?.length||0}, reportLetter=${j.reportLetter?.length||0}자`);
+      } catch(e){}
 
       console.log('GPT 성공');
       return res.status(200).json({ content: [{ type: 'text', text }] });
