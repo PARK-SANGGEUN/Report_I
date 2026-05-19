@@ -1,8 +1,8 @@
 // ══════════════════════════════════════════════
-// 리포트아이 — 백엔드 API v19
-// Gemini 1.5 Flash 1순위 (텍스트만, 빠름)
-// 텍스트 한도 50K (2학년 데이터까지)
-// Phase 디버깅 강화
+// 리포트아이 — 백엔드 API v20
+// Vercel Pro 플랜 활용 (maxDuration 300s)
+// Gemini 2.5 Pro 1순위 (고품질 분석)
+// 텍스트 한도 90K (생기부 전체)
 // ══════════════════════════════════════════════
 
 export default async function handler(req, res) {
@@ -27,11 +27,11 @@ export default async function handler(req, res) {
   if (!prompt) return res.status(400).json({ error: 'prompt가 없습니다.' });
 
   const phaseLbl = phase || 'main';
-  console.log(`[v19 ${phaseLbl}] 텍스트 길이: ${(pdfText||'').length}자, prompt 길이: ${prompt.length}자`);
+  console.log(`[v20 ${phaseLbl}] 텍스트 길이: ${(pdfText||'').length}자, prompt 길이: ${prompt.length}자`);
 
-  // ⚡ 텍스트 50,000자까지 (2학년 데이터 들어가게)
-  const trimText = (pdfText||'').length > 50000
-    ? pdfText.slice(0, 50000) + '\n...(생략)'
+  // ⚡ 텍스트 90K (생기부 전체 들어감)
+  const trimText = (pdfText||'').length > 90000
+    ? pdfText.slice(0, 90000) + '\n...(생략)'
     : (pdfText||'');
 
   if (!trimText || trimText.length < 200) {
@@ -44,11 +44,11 @@ export default async function handler(req, res) {
     const result = await callAI({
       geminiKey, anthropicKey, openaiKey,
       pdfText: trimText, prompt,
-      maxTokens: 8000,
+      maxTokens: 12000,  // 풍부한 분석
       phaseLbl,
       systemMsg: phase === 'phase2'
-        ? 'Phase 2: 학과 적합도 5개+ / 탐구주제 5개+ / 면접 7개+ / 종합리포트 2000자+. 빈 배열 절대 금지. JSON만 반환.'
-        : '학생부 정밀 분석. 모든 배열의 최소 개수와 각 필드 최소 분량을 반드시 지키세요. JSON만 반환.'
+        ? '당신은 최상위 입학사정관입니다. 학과 적합도 5개+ / 탐구주제 5개+ / 면접 7개+ / 종합리포트 2500자+. 모든 배열 최소 개수 준수, 빈 배열 절대 금지. 원문 인용 충분. JSON만 반환.'
+        : '당신은 최상위 입학사정관입니다. 학생부 정밀 분석. grades 학기별 모든 과목 / activities 15개+ / strengths 5개+ / weaknesses 3개+ / keywords 25개+. 모든 필드 풍부하게 채우세요. 원문 인용 필수. JSON만 반환.'
     });
 
     if (phase !== 'phase2' && localParsed) {
@@ -81,13 +81,14 @@ export default async function handler(req, res) {
 
 async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, maxTokens, systemMsg, phaseLbl }) {
 
+  // ── Gemini 2.5 Pro 1순위 (고품질, Pro 플랜이라 시간 여유)
   if (geminiKey) {
     try {
-      console.log(`[${phaseLbl}] Gemini 1.5 Flash 호출`);
+      console.log(`[${phaseLbl}] Gemini 2.5 Pro 호출`);
       const fullPrompt = `${systemMsg}\n\n=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
 
       const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -105,11 +106,34 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
       if (r.ok) {
         const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
         const finishReason = d.candidates?.[0]?.finishReason || 'UNKNOWN';
-        console.log(`[${phaseLbl}] Gemini 성공 (finish: ${finishReason}, ${text.length}자)`);
+        console.log(`[${phaseLbl}] Gemini Pro 성공 (finish: ${finishReason}, ${text.length}자)`);
         return parseJSON(text);
       }
       const errMsg = d.error?.message || JSON.stringify(d).slice(0,300);
-      console.warn(`[${phaseLbl}] Gemini 실패:`, errMsg);
+      console.warn(`[${phaseLbl}] Gemini Pro 실패:`, errMsg);
+      // Pro 실패 시 Flash로 폴백
+      console.log(`[${phaseLbl}] Gemini 1.5 Flash 폴백 시도`);
+      const r2 = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+            generationConfig: {
+              maxOutputTokens: maxTokens,
+              temperature: 0.3,
+              responseMimeType: 'application/json'
+            }
+          })
+        }
+      );
+      const d2 = await r2.json();
+      if (r2.ok) {
+        const text = d2.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        console.log(`[${phaseLbl}] Gemini Flash 성공`);
+        return parseJSON(text);
+      }
       if (!anthropicKey && !openaiKey) throw new Error(`Gemini: ${errMsg}`);
     } catch(e) {
       console.warn(`[${phaseLbl}] Gemini 예외:`, e.message);
@@ -117,8 +141,10 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
     }
   }
 
+  // ── Claude (있으면 사용)
   if (anthropicKey) {
     try {
+      console.log(`[${phaseLbl}] Claude 호출`);
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -138,6 +164,7 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
       const d = await r.json();
       if (r.ok) {
         const text = d.content?.find(b=>b.type==='text')?.text || '{}';
+        console.log(`[${phaseLbl}] Claude 성공`);
         return parseJSON(text);
       }
       if (!openaiKey) throw new Error(d.error?.message || 'Claude 호출 실패');
@@ -146,8 +173,11 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
     }
   }
 
+  // ── GPT-4o 폴백
   if (openaiKey) {
+    console.log(`[${phaseLbl}] GPT-4o 호출`);
     const fullPrompt = `=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
+
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -168,6 +198,7 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
     const d = await r.json();
     if (!r.ok) throw new Error(d.error?.message || 'GPT 호출 실패');
     const text = d.choices?.[0]?.message?.content || '{}';
+    console.log(`[${phaseLbl}] GPT 성공`);
     return parseJSON(text);
   }
 
