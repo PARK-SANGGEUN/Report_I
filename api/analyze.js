@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════
-// 리포트아이 — 백엔드 API v15.1
-// 단일 호출 모드 (타임아웃 회피 위해 Phase 1/2 분리 호출은 클라이언트에서)
-// 한 번 호출 = 한 번의 AI 분석 = 50초 이내
+// 리포트아이 — 백엔드 API v16
+// Gemini 2.5 Pro 1순위 (PDF 직접 처리)
+// GPT-4o 폴백 (Gemini 장애 시)
 // ══════════════════════════════════════════════
 
 export default async function handler(req, res) {
@@ -11,12 +11,13 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const geminiKey    = process.env.GEMINI_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openaiKey    = process.env.OPENAI_API_KEY;
 
-  if (!anthropicKey && !openaiKey) {
+  if (!geminiKey && !anthropicKey && !openaiKey) {
     return res.status(500).json({
-      error: 'API 키 없음: Vercel 환경변수에 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY를 추가하세요.'
+      error: 'API 키 없음: Vercel 환경변수에 GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY 중 하나를 추가하세요.'
     });
   }
 
@@ -26,23 +27,15 @@ export default async function handler(req, res) {
   if (!prompt) return res.status(400).json({ error: 'prompt가 없습니다.' });
 
   const phaseLbl = phase || 'main';
-  console.log(`[v15.1 ${phaseLbl}] 요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB, pdfText=${Math.round((pdfText||'').length/1024)}KB`);
+  console.log(`[v16 ${phaseLbl}] 요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB`);
 
-  const trimText = (pdfText||'').length > 14000
-    ? pdfText.slice(0, 14000) + '\n...(생략)'
+  const trimText = (pdfText||'').length > 25000
+    ? pdfText.slice(0, 25000) + '\n...(생략)'
     : (pdfText||'');
-
-  if (!trimText || trimText.length < 200) {
-    if (!anthropicKey) {
-      return res.status(400).json({
-        error: 'PDF 텍스트 추출 실패 — 스캔본이거나 보안 설정된 PDF입니다.'
-      });
-    }
-  }
 
   try {
     const result = await callAI({
-      anthropicKey, openaiKey,
+      geminiKey, anthropicKey, openaiKey,
       pdfB64, prompt, pdfText: trimText,
       maxTokens: 12000,
       systemMsg: phase === 'phase2'
@@ -50,6 +43,7 @@ export default async function handler(req, res) {
         : '학생부 정밀 분석. 모든 배열의 최소 개수와 각 필드 최소 분량을 반드시 지키세요. JSON만 반환.'
     });
 
+    // 로컬 파서 보강 (Phase 1)
     if (phase !== 'phase2' && localParsed) {
       if (!result.gradeAvg || result.gradeAvg === '0') {
         if (localParsed.gradeAvg) result.gradeAvg = localParsed.gradeAvg;
@@ -76,9 +70,54 @@ export default async function handler(req, res) {
   }
 }
 
-async function callAI({ anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTokens, systemMsg }) {
+// ─────────────────────────────────────────────
+// AI 호출 (Gemini 1순위 → Claude → GPT 폴백)
+// ─────────────────────────────────────────────
+async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTokens, systemMsg }) {
+
+  // ── Gemini 1순위 (PDF 직접 처리, 한국어 좋음)
+  if (geminiKey) {
+    try {
+      console.log('Gemini 2.5 Pro 호출 시작...');
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              role: 'user',
+              parts: [
+                { inline_data: { mime_type: 'application/pdf', data: pdfB64 } },
+                { text: `${systemMsg}\n\n${prompt}` }
+              ]
+            }],
+            generationConfig: {
+              maxOutputTokens: maxTokens,
+              temperature: 0.3,
+              responseMimeType: 'application/json'
+            }
+          })
+        }
+      );
+      const d = await r.json();
+      if (r.ok) {
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        console.log('Gemini 성공');
+        return parseJSON(text);
+      }
+      console.warn('Gemini 실패:', d.error?.message || JSON.stringify(d).slice(0,200));
+      if (!anthropicKey && !openaiKey) throw new Error(d.error?.message || 'Gemini 호출 실패');
+    } catch(e) {
+      console.warn('Gemini 예외:', e.message);
+      if (!anthropicKey && !openaiKey) throw e;
+    }
+  }
+
+  // ── Claude 2순위
   if (anthropicKey) {
     try {
+      console.log('Claude 호출 시작...');
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -101,6 +140,7 @@ async function callAI({ anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTok
       const d = await r.json();
       if (r.ok) {
         const text = d.content?.find(b=>b.type==='text')?.text || '{}';
+        console.log('Claude 성공');
         return parseJSON(text);
       }
       console.warn('Claude 실패:', d.error?.message);
@@ -111,10 +151,12 @@ async function callAI({ anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTok
     }
   }
 
+  // ── GPT-4o 최후 폴백 (텍스트 기반)
   if (openaiKey) {
     if (!pdfText || pdfText.length < 200) {
-      throw new Error('PDF 텍스트 추출 실패 — 스캔본이거나 보안 PDF. GPT는 PDF 직접 못 받습니다.');
+      throw new Error('PDF 텍스트 추출 실패 — GPT는 PDF 직접 못 받습니다.');
     }
+    console.log('GPT-4o 호출 시작...');
     const fullPrompt = `=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
 
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -137,6 +179,7 @@ async function callAI({ anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTok
     const d = await r.json();
     if (!r.ok) throw new Error(d.error?.message || 'GPT 호출 실패');
     const text = d.choices?.[0]?.message?.content || '{}';
+    console.log('GPT 성공');
     return parseJSON(text);
   }
 
