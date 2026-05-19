@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════
-// 리포트아이 — 백엔드 API v17
-// Gemini 2.5 Flash 1순위 (빠른 응답, 60초 보장)
-// GPT-4o 폴백 (Gemini 장애 시)
+// 리포트아이 — 백엔드 API v18
+// Gemini 1.5 Flash 1순위 (텍스트만 전송, 가장 빠름)
+// 60초 타임아웃 절대 안 걸리게 최적화
 // ══════════════════════════════════════════════
 
 export default async function handler(req, res) {
@@ -23,21 +23,27 @@ export default async function handler(req, res) {
 
   const { pdfB64, prompt, pdfText, parsed: localParsed, phase } = req.body;
 
-  if (!pdfB64) return res.status(400).json({ error: 'pdfB64가 없습니다.' });
   if (!prompt) return res.status(400).json({ error: 'prompt가 없습니다.' });
 
   const phaseLbl = phase || 'main';
-  console.log(`[v17 ${phaseLbl}] 요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB`);
+  console.log(`[v18 ${phaseLbl}] 텍스트 길이: ${(pdfText||'').length}자`);
 
-  const trimText = (pdfText||'').length > 20000
-    ? pdfText.slice(0, 20000) + '\n...(생략)'
+  // ⚡ 텍스트 우선 (PDF 안 보냄 → 빠름)
+  const trimText = (pdfText||'').length > 22000
+    ? pdfText.slice(0, 22000) + '\n...(생략)'
     : (pdfText||'');
+
+  if (!trimText || trimText.length < 200) {
+    return res.status(400).json({
+      error: 'PDF 텍스트 추출 실패 — 스캔본이거나 보안 설정된 PDF입니다. 한글파일(.hwp)을 PDF로 다시 출력하거나, NEIS에서 텍스트 추출 가능한 형식으로 받아주세요.'
+    });
+  }
 
   try {
     const result = await callAI({
       geminiKey, anthropicKey, openaiKey,
-      pdfB64, prompt, pdfText: trimText,
-      maxTokens: 8000,  // 60초 안에 응답 보장
+      pdfText: trimText, prompt,
+      maxTokens: 8000,
       systemMsg: phase === 'phase2'
         ? 'Phase 2: 학과 적합도 5개+ / 탐구주제 5개+ / 면접 7개+ / 종합리포트 2000자+. 빈 배열 절대 금지. JSON만 반환.'
         : '학생부 정밀 분석. 모든 배열의 최소 개수와 각 필드 최소 분량을 반드시 지키세요. JSON만 반환.'
@@ -69,24 +75,23 @@ export default async function handler(req, res) {
   }
 }
 
-async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTokens, systemMsg }) {
+async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, maxTokens, systemMsg }) {
 
-  // ── Gemini 2.5 Flash 1순위 (PDF 직접 처리, 빠름)
+  // ── Gemini 1.5 Flash 1순위 (텍스트만, 가장 빠름)
   if (geminiKey) {
     try {
-      console.log('Gemini 2.5 Flash 호출 시작...');
+      console.log('Gemini 1.5 Flash 호출 시작...');
+      const fullPrompt = `${systemMsg}\n\n=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
+
       const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{
               role: 'user',
-              parts: [
-                { inline_data: { mime_type: 'application/pdf', data: pdfB64 } },
-                { text: `${systemMsg}\n\n${prompt}` }
-              ]
+              parts: [{ text: fullPrompt }]
             }],
             generationConfig: {
               maxOutputTokens: maxTokens,
@@ -110,10 +115,10 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfT
     }
   }
 
-  // ── Claude 2순위
+  // ── Claude 2순위 (PDF 직접 처리 가능, 단 텍스트로도 호출)
   if (anthropicKey) {
     try {
-      console.log('Claude 호출 시작...');
+      console.log('Claude 호출 시작 (텍스트)...');
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -126,10 +131,7 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfT
           max_tokens: maxTokens,
           messages: [{
             role: 'user',
-            content: [
-              { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfB64 } },
-              { type: 'text', text: prompt }
-            ]
+            content: `${systemMsg}\n\n=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`
           }]
         })
       });
@@ -147,11 +149,8 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfT
     }
   }
 
-  // ── GPT-4o 폴백
+  // ── GPT-4o 최후 폴백
   if (openaiKey) {
-    if (!pdfText || pdfText.length < 200) {
-      throw new Error('PDF 텍스트 추출 실패 — GPT는 PDF 직접 못 받습니다.');
-    }
     console.log('GPT-4o 호출 시작...');
     const fullPrompt = `=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
 
