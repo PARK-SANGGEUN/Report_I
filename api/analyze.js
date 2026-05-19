@@ -1,6 +1,6 @@
 // ══════════════════════════════════════════════
-// 리포트아이 — 백엔드 API v16
-// Gemini 2.5 Pro 1순위 (PDF 직접 처리)
+// 리포트아이 — 백엔드 API v17
+// Gemini 2.5 Flash 1순위 (빠른 응답, 60초 보장)
 // GPT-4o 폴백 (Gemini 장애 시)
 // ══════════════════════════════════════════════
 
@@ -27,23 +27,22 @@ export default async function handler(req, res) {
   if (!prompt) return res.status(400).json({ error: 'prompt가 없습니다.' });
 
   const phaseLbl = phase || 'main';
-  console.log(`[v16 ${phaseLbl}] 요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB`);
+  console.log(`[v17 ${phaseLbl}] 요청 크기: pdfB64=${Math.round(pdfB64.length/1024)}KB`);
 
-  const trimText = (pdfText||'').length > 25000
-    ? pdfText.slice(0, 25000) + '\n...(생략)'
+  const trimText = (pdfText||'').length > 20000
+    ? pdfText.slice(0, 20000) + '\n...(생략)'
     : (pdfText||'');
 
   try {
     const result = await callAI({
       geminiKey, anthropicKey, openaiKey,
       pdfB64, prompt, pdfText: trimText,
-      maxTokens: 12000,
+      maxTokens: 8000,  // 60초 안에 응답 보장
       systemMsg: phase === 'phase2'
-        ? 'Phase 2: 학과 적합도 5개+ / 탐구주제 5개+ / 면접 7개+ / 종합리포트 2500자+. 분량 강제 규칙을 반드시 지키세요. JSON만 반환.'
+        ? 'Phase 2: 학과 적합도 5개+ / 탐구주제 5개+ / 면접 7개+ / 종합리포트 2000자+. 빈 배열 절대 금지. JSON만 반환.'
         : '학생부 정밀 분석. 모든 배열의 최소 개수와 각 필드 최소 분량을 반드시 지키세요. JSON만 반환.'
     });
 
-    // 로컬 파서 보강 (Phase 1)
     if (phase !== 'phase2' && localParsed) {
       if (!result.gradeAvg || result.gradeAvg === '0') {
         if (localParsed.gradeAvg) result.gradeAvg = localParsed.gradeAvg;
@@ -70,17 +69,14 @@ export default async function handler(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────
-// AI 호출 (Gemini 1순위 → Claude → GPT 폴백)
-// ─────────────────────────────────────────────
 async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfText, maxTokens, systemMsg }) {
 
-  // ── Gemini 1순위 (PDF 직접 처리, 한국어 좋음)
+  // ── Gemini 2.5 Flash 1순위 (PDF 직접 처리, 빠름)
   if (geminiKey) {
     try {
-      console.log('Gemini 2.5 Pro 호출 시작...');
+      console.log('Gemini 2.5 Flash 호출 시작...');
       const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -151,7 +147,7 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfB64, prompt, pdfT
     }
   }
 
-  // ── GPT-4o 최후 폴백 (텍스트 기반)
+  // ── GPT-4o 폴백
   if (openaiKey) {
     if (!pdfText || pdfText.length < 200) {
       throw new Error('PDF 텍스트 추출 실패 — GPT는 PDF 직접 못 받습니다.');
