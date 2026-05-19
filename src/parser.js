@@ -124,13 +124,50 @@ export function parseGradesWithContext(pages) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // 학년/학기 감지
-    const gradeM = line.match(/\[(\d)학년\]/) || line.match(/^(\d)학년$/);
-    if (gradeM) { currentGrade = parseInt(gradeM[1]); currentSem = 1; continue; }
-    const semM = line.match(/(\d)학기/);
-    if (semM && !line.includes('수강')) { currentSem = parseInt(semM[1]); }
+    // ── 학년/학기 감지 (대폭 강화) ──
+    // 패턴 다양화: [1학년], 1학년, 2학년 1학기, [2학년] [1학기], (2)학년, 2 학년 등
+    let gradeMatched = false;
 
-    // 성적 행 파싱 - 여러 패턴 시도
+    // 패턴 1: "[2학년]" 또는 "[2학년] [1학기]" 같이 묶음
+    const bracketM = line.match(/\[\s*(\d)\s*학년\s*\](?:.*?\[\s*(\d)\s*학기\s*\])?/);
+    if (bracketM) {
+      currentGrade = parseInt(bracketM[1]);
+      if (bracketM[2]) currentSem = parseInt(bracketM[2]);
+      else currentSem = 1;
+      gradeMatched = true;
+      continue;
+    }
+
+    // 패턴 2: "2학년 1학기" 한 줄로 (가장 흔한 형태!)
+    const inlineM = line.match(/(?:^|\s)(\d)\s*학년\s+(\d)\s*학기/);
+    if (inlineM) {
+      currentGrade = parseInt(inlineM[1]);
+      currentSem = parseInt(inlineM[2]);
+      gradeMatched = true;
+      continue;
+    }
+
+    // 패턴 3: "2학년" 단독 또는 줄 시작
+    const gradeOnlyM = line.match(/^(\d)\s*학년(?:\s|$)/) || line.match(/^\s*(\d)\s*학년$/);
+    if (gradeOnlyM) {
+      currentGrade = parseInt(gradeOnlyM[1]);
+      currentSem = 1;
+      gradeMatched = true;
+      continue;
+    }
+
+    // 패턴 4: 표 헤더의 학년 표시 (예: "학년 1학년 2학년 3학년")는 무시하기 위한 필터
+    // 단, 줄에 "학년"이 여러 번 나오면 헤더로 보고 스킵
+    const gradeCount = (line.match(/학년/g) || []).length;
+    if (gradeCount >= 2) continue;
+
+    // 패턴 5: "1학기" 또는 "2학기" 단독 (학년은 유지)
+    const semM = line.match(/(?:^|\s)(\d)\s*학기(?:\s|$)/);
+    if (semM && !line.includes('수강') && !line.includes('단위') && line.length < 30) {
+      currentSem = parseInt(semM[1]);
+    }
+
+    // ── 성적 행 파싱 ──
     // 패턴A: "국어 4 93/78.2(12.7) A(251) 2"
     const patA = line.match(/^([가-힣A-Za-z·Ⅰ-Ⅹ\s\-]+?)\s+(\d{1,2})\s+(\d{2,3})\/(\d{1,3}\.?\d*)\((\d{1,2}\.?\d*)\)\s+[A-E]\(\d+\)\s+(\d)$/);
     if (patA) {
@@ -164,6 +201,15 @@ export function parseGradesWithContext(pages) {
       }
     }
   }
+
+  // 디버깅: 콘솔에 학년 분포 출력
+  const distribution = {};
+  result.forEach(r => {
+    const key = `${r.gN}학년 ${r.sN}학기`;
+    distribution[key] = (distribution[key] || 0) + 1;
+  });
+  console.log('[parser] 학년별 과목 분포:', distribution);
+  console.log('[parser] 진로선택 과목:', achieveResult.length, '개');
 
   // 중복 제거
   const seen = new Set();
