@@ -19,11 +19,17 @@ const NAV=[
 
 // 그래프 탭 정의 (교과 성적 화면 내부 탭)
 const GRAPH_TABS = [
-  {id:"all", lbl:"전체 교과", filter:null},
-  {id:"kme", lbl:"국·영·수", filter:["국어","영어","수학"]},
-  {id:"kmes", lbl:"국·영·수·사", filter:["국어","영어","수학","사회"]},
-  {id:"kmesi", lbl:"국·영·수·과", filter:["국어","영어","수학","과학"]},
-  {id:"major", lbl:"전공 연계", filter:"_major_"}, // 동적 (전공별)
+  {id:"all", lbl:"전체 교과", filter:null, group:"종합"},
+  {id:"kme", lbl:"국·영·수", filter:["국어","영어","수학"], group:"종합"},
+  {id:"kmes", lbl:"국·영·수·사", filter:["국어","영어","수학","사회"], group:"종합"},
+  {id:"kmesi", lbl:"국·영·수·과", filter:["국어","영어","수학","과학"], group:"종합"},
+  {id:"major", lbl:"전공 연계", filter:"_major_", group:"종합"},
+  // 교과별 (특정 교과 추이)
+  {id:"subj_kor", lbl:"국어만", filter:["국어"], group:"교과별"},
+  {id:"subj_math", lbl:"수학만", filter:["수학"], group:"교과별"},
+  {id:"subj_eng", lbl:"영어만", filter:["영어"], group:"교과별"},
+  {id:"subj_soc", lbl:"사회만", filter:["사회"], group:"교과별"},
+  {id:"subj_sci", lbl:"과학만", filter:["과학"], group:"교과별"},
 ];
 
 // 희망 전공에 따른 연계 교과군 자동 매핑
@@ -227,40 +233,82 @@ export default function App() {
     if(phase!=="result"||sec!=="s1"||!G?.grades?.length||!window.Chart) return;
     const gs=[...G.grades].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN);
     const cur=(G.curriculum||"2015"); const maxLv=cur.includes("2022")?5:9;
-    const PAL={국어:"#4c6ef5",수학:"#c92a2a",영어:"#2b8a3e",사회:"#d97706",과학:"#1971c2",기술가정:"#6741d9",예체능:"#868e96",기타:"#adb5bd"};
 
-    // ⚡ 그래프 탭에 따라 교과군 필터링
+    // ⚡ 탭에 따른 필터링
     const tabDef = GRAPH_TABS.find(t => t.id === graphTab) || GRAPH_TABS[0];
     let activeGroups;
-    if (tabDef.filter === null) activeGroups = null; // 전체
-    else if (tabDef.filter === "_major_") activeGroups = getMajorRelatedGroups(inMajor || G?.studentType);
-    else activeGroups = tabDef.filter;
+    let tabColor = "#4c6ef5";
+    let isSubjectTab = false;
+    let targetSubject = null;
+
+    if (tabDef.filter === null) { activeGroups = null; tabColor = "#1a1d2e"; }
+    else if (tabDef.filter === "_major_") { activeGroups = getMajorRelatedGroups(inMajor || G?.studentType); tabColor = "#d97706"; }
+    else if (tabDef.id?.startsWith("subj_")) {
+      // 교과별 탭 (특정 교과군만)
+      isSubjectTab = true;
+      targetSubject = tabDef.filter[0];
+      activeGroups = tabDef.filter;
+      tabColor = ({국어:"#4c6ef5",수학:"#c92a2a",영어:"#2b8a3e",사회:"#d97706",과학:"#1971c2"})[targetSubject] || "#4c6ef5";
+    }
+    else { activeGroups = tabDef.filter; tabColor = "#4c6ef5"; }
 
     const sks=[...new Set(gs.map(r=>`${r.gN}-${r.sN}`))].sort();
     const sls=sks.map(k=>{const[g,s]=k.split("-");return`${g}학년${s}학기`;});
-    const avgOf=(sk,grp)=>{
+
+    // 학기별 평균 (필터 적용)
+    const filterAvg = (sk) => {
       const[g,s]=sk.split("-");
-      const f=gs.filter(r=>String(r.gN)===g&&String(r.sN)===s&&(!grp||r.group===grp)&&parseInt(r.level||0)>0);
+      const f=gs.filter(r=>String(r.gN)===g&&String(r.sN)===s&&(!activeGroups||activeGroups.includes(r.group))&&parseInt(r.level||0)>0);
       return f.length?+(f.reduce((a,b)=>a+parseInt(b.level),0)/f.length).toFixed(2):null;
     };
-    const allGrps = Object.keys(PAL).filter(g=>gs.some(r=>r.group===g));
-    const grps = activeGroups ? allGrps.filter(g=>activeGroups.includes(g)) : allGrps;
 
-    const baseOpts=(ml)=>({responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{position:"right",labels:{boxWidth:10,font:{size:10},padding:6,usePointStyle:true}},tooltip:{backgroundColor:"rgba(26,29,46,.93)",titleColor:"#fff",bodyColor:"rgba(255,255,255,.7)",padding:9,cornerRadius:6}},scales:{y:{reverse:true,min:1,max:ml,ticks:{stepSize:1,callback:v=>`${v}등급`,font:{size:10,family:"'DM Mono',monospace"}},title:{display:true,text:"낮을수록 우수",font:{size:9},color:"#8b8faa"},grid:{color:"rgba(0,0,0,.04)"}},x:{ticks:{font:{size:10}},grid:{display:false}}}});
+    const baseOpts={
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:"index",intersect:false},
+      plugins:{
+        legend:{display:false}, // 단순화 — 범례 숨김
+        tooltip:{
+          backgroundColor:"rgba(26,29,46,.93)",titleColor:"#fff",bodyColor:"rgba(255,255,255,.9)",
+          padding:12,cornerRadius:8,titleFont:{size:13},bodyFont:{size:13},
+          callbacks:{
+            label:(ctx)=>ctx.parsed.y!==null?`평균등급 ${ctx.parsed.y}`:'데이터 없음'
+          }
+        }
+      },
+      scales:{
+        y:{reverse:true,min:1,max:maxLv,ticks:{stepSize:1,callback:v=>`${v}등급`,font:{size:11,family:"'DM Mono',monospace",weight:"600"}},title:{display:true,text:"평균 등급 (낮을수록 우수)",font:{size:11,weight:"600"},color:"#64748b"},grid:{color:"rgba(0,0,0,.05)"}},
+        x:{ticks:{font:{size:11,weight:"600"}},grid:{display:false}}
+      }
+    };
 
     if(rTrend.current){
       if(rTrend.current._c) rTrend.current._c.destroy();
-      const ds=grps.map(g=>({label:g,data:sks.map(sk=>avgOf(sk,g)),borderColor:PAL[g],backgroundColor:"transparent",tension:.35,pointRadius:5,borderWidth:2,spanGaps:true,pointBackgroundColor:PAL[g],pointBorderColor:"#fff",pointBorderWidth:2}));
-      // 필터 평균 = 활성 교과군만 평균
-      const filterAvg = (sk) => {
-        const[g,s]=sk.split("-");
-        const f=gs.filter(r=>String(r.gN)===g&&String(r.sN)===s&&(!activeGroups||activeGroups.includes(r.group))&&parseInt(r.level||0)>0);
-        return f.length?+(f.reduce((a,b)=>a+parseInt(b.level),0)/f.length).toFixed(2):null;
+
+      // 단일 평균선만 표시 (본인 요청대로 단순화)
+      const avgData = sks.map(filterAvg);
+      const dataset = {
+        label: tabDef.lbl,
+        data: avgData,
+        borderColor: tabColor,
+        backgroundColor: tabColor + "20",
+        borderWidth: 3,
+        tension: 0.35,
+        spanGaps: true,
+        pointRadius: 8,
+        pointHoverRadius: 12,
+        pointBackgroundColor: tabColor,
+        pointBorderColor: "#fff",
+        pointBorderWidth: 3,
+        fill: true
       };
-      ds.unshift({label: tabDef.id==="all"?"전체평균":"필터평균",data:sks.map(filterAvg),borderColor:"#1a1d2e",backgroundColor:"rgba(26,29,46,.05)",borderWidth:3,borderDash:[6,3],pointRadius:6,tension:.35,spanGaps:true,fill:true,pointBackgroundColor:"#1a1d2e",pointBorderColor:"#fff",pointBorderWidth:2});
-      rTrend.current._c=new window.Chart(rTrend.current,{type:"line",data:{labels:sls,datasets:ds},options:baseOpts(maxLv)});
+
+      rTrend.current._c = new window.Chart(rTrend.current, {
+        type: "line",
+        data: { labels: sls, datasets: [dataset] },
+        options: baseOpts
+      });
     }
-    // 막대 그래프 제거됨 (v19) — 의미 없는 시각화라 삭제
+    // 막대 그래프 제거됨
   },[phase,sec,G,graphTab,inMajor]);
 
   const name=G?.studentName||inName||"학생";
@@ -403,39 +451,114 @@ export default function App() {
                 <PH eye="성적 분析" title="교과 성적 현황" sub={(G?.curriculum||"2015").includes("2022")?"2022 개정 교육과정 · 5등급제":"2015 개정 교육과정 · 9등급제"}/>
                 {G?.gradeAnalysis?.currExplain&&<div className="info-note blue" style={{marginBottom:14}}>{G.gradeAnalysis.currExplain}</div>}
 
-                {/* ⚡ 그래프 탭 UI */}
-                <div className="graph-tabs" style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",borderBottom:"1px solid var(--border)",paddingBottom:0}}>
-                  {GRAPH_TABS.map(t=>(
-                    <button
-                      key={t.id}
-                      onClick={()=>setGraphTab(t.id)}
-                      style={{
-                        padding:"10px 18px",
-                        background:graphTab===t.id?"#4c6ef5":"transparent",
-                        color:graphTab===t.id?"#fff":"var(--ink2)",
-                        border:"none",
-                        borderRadius:"8px 8px 0 0",
-                        cursor:"pointer",
-                        fontWeight:graphTab===t.id?700:500,
-                        fontSize:13,
-                        transition:"all .15s",
-                        marginBottom:-1
-                      }}
-                    >{t.lbl}{t.id==="major"&&inMajor?` (${inMajor})`:""}</button>
-                  ))}
+                {/* ⚡ 그래프 탭 UI — 두 그룹으로 분리 */}
+                <div style={{marginBottom:16}}>
+                  {/* 종합 탭 */}
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                    <span style={{fontSize:11,fontWeight:700,color:"var(--ink3)",letterSpacing:".05em",minWidth:48}}>📊 종합</span>
+                    <div className="graph-tabs" style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {GRAPH_TABS.filter(t=>t.group==="종합").map(t=>(
+                        <button
+                          key={t.id}
+                          onClick={()=>setGraphTab(t.id)}
+                          style={{
+                            padding:"8px 14px",
+                            background:graphTab===t.id?"#4c6ef5":"#fff",
+                            color:graphTab===t.id?"#fff":"var(--ink2)",
+                            border:`1px solid ${graphTab===t.id?"#4c6ef5":"var(--border)"}`,
+                            borderRadius:6,
+                            cursor:"pointer",
+                            fontWeight:graphTab===t.id?700:500,
+                            fontSize:12,
+                            transition:"all .15s"
+                          }}
+                        >{t.lbl}{t.id==="major"&&inMajor?` (${inMajor})`:""}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* 교과별 탭 */}
+                  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <span style={{fontSize:11,fontWeight:700,color:"var(--ink3)",letterSpacing:".05em",minWidth:48}}>📚 교과별</span>
+                    <div className="graph-tabs" style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {GRAPH_TABS.filter(t=>t.group==="교과별").map(t=>(
+                        <button
+                          key={t.id}
+                          onClick={()=>setGraphTab(t.id)}
+                          style={{
+                            padding:"8px 14px",
+                            background:graphTab===t.id?"#d97706":"#fff",
+                            color:graphTab===t.id?"#fff":"var(--ink2)",
+                            border:`1px solid ${graphTab===t.id?"#d97706":"var(--border)"}`,
+                            borderRadius:6,
+                            cursor:"pointer",
+                            fontWeight:graphTab===t.id?700:500,
+                            fontSize:12,
+                            transition:"all .15s"
+                          }}
+                        >{t.lbl}</button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
-                {/* trendByGroup 탭별 분석글 */}
-                {G?.gradeAnalysis?.trendByGroup&&(
-                  <div className="info-note blue" style={{marginBottom:14,fontSize:13,lineHeight:1.7}}>
-                    <strong>📊 {GRAPH_TABS.find(t=>t.id===graphTab)?.lbl} 성적 추이 분석:</strong><br/>
-                    {graphTab==="all" && (G.gradeAnalysis.overall || "전체 교과 분석 데이터가 없습니다.").slice(0,500)}
-                    {graphTab==="kme" && (G.gradeAnalysis.trendByGroup.국영수 || "국영수 분석 데이터가 없습니다.")}
-                    {graphTab==="kmes" && (G.gradeAnalysis.trendByGroup.국영수사 || "국영수사 분석 데이터가 없습니다.")}
-                    {graphTab==="kmesi" && (G.gradeAnalysis.trendByGroup.국영수과 || "국영수과 분석 데이터가 없습니다.")}
-                    {graphTab==="major" && (G.gradeAnalysis.trendByGroup.전공연계 || G.gradeAnalysis.majorLink || "전공 연계 분석 데이터가 없습니다.")}
-                  </div>
-                )}
+                {/* 탭별 분석글 */}
+                {(() => {
+                  const tabDef = GRAPH_TABS.find(t=>t.id===graphTab) || GRAPH_TABS[0];
+
+                  // 종합 탭 — AI 분석글 사용
+                  if (tabDef.group === "종합") {
+                    let text = "";
+                    if (graphTab==="all") text = G?.gradeAnalysis?.overall || "전체 교과 분석 데이터가 없습니다.";
+                    else if (graphTab==="kme") text = G?.gradeAnalysis?.trendByGroup?.국영수 || "국영수 분석 데이터가 없습니다.";
+                    else if (graphTab==="kmes") text = G?.gradeAnalysis?.trendByGroup?.국영수사 || "국영수사 분석 데이터가 없습니다.";
+                    else if (graphTab==="kmesi") text = G?.gradeAnalysis?.trendByGroup?.국영수과 || "국영수과 분석 데이터가 없습니다.";
+                    else if (graphTab==="major") text = G?.gradeAnalysis?.trendByGroup?.전공연계 || G?.gradeAnalysis?.majorLink || "전공 연계 분석 데이터가 없습니다.";
+
+                    return (
+                      <div className="info-note blue" style={{marginBottom:14,fontSize:13,lineHeight:1.7}}>
+                        <strong>📊 {tabDef.lbl} 성적 추이 분석:</strong><br/>
+                        {text}
+                      </div>
+                    );
+                  }
+
+                  // 교과별 탭 — 자동 분석글 생성
+                  if (tabDef.group === "교과별" && G?.grades?.length) {
+                    const subj = tabDef.filter[0];
+                    const filtered = G.grades.filter(r => r.group === subj && parseInt(r.level||0) > 0);
+                    if (!filtered.length) {
+                      return (
+                        <div className="info-note yellow" style={{marginBottom:14,fontSize:13}}>
+                          ⚠️ {subj} 교과 데이터가 없습니다.
+                        </div>
+                      );
+                    }
+
+                    const avg = (filtered.reduce((s,r)=>s+parseInt(r.level),0)/filtered.length).toFixed(2);
+                    const sorted = [...filtered].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN);
+                    const first = sorted[0];
+                    const last = sorted[sorted.length-1];
+                    const trend = parseInt(first.level) - parseInt(last.level);
+                    const trendText = trend > 0.5 ? `📈 ${first.grade}${first.semester} ${first.level}등급 → ${last.grade}${last.semester} ${last.level}등급으로 향상`
+                      : trend < -0.5 ? `📉 ${first.grade}${first.semester} ${first.level}등급 → ${last.grade}${last.semester} ${last.level}등급으로 하락 (보완 필요)`
+                      : `→ 안정적인 성적 유지 (${first.level}~${last.level}등급)`;
+                    const subjects = [...new Set(filtered.map(r => r.subject))];
+
+                    return (
+                      <div className="info-note blue" style={{marginBottom:14,fontSize:13,lineHeight:1.7}}>
+                        <strong>📚 {subj} 교과 추이 분석</strong><br/>
+                        • 이수 과목 <strong>{filtered.length}개</strong>: {subjects.join(", ")}<br/>
+                        • 평균 등급: <strong style={{fontSize:15,color:"#4c6ef5"}}>{avg}등급</strong><br/>
+                        • 추이: {trendText}<br/>
+                        {G?.gradeAnalysis?.overall && (
+                          <span style={{color:"var(--ink3)",fontSize:12}}>※ 전체 교과 분석 참고: 종합 탭 클릭</span>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return null;
+                })()}
 
                 <div className="grade-section">
                   {/* 학기별 평균 등급 요약 (탭 필터 반영) */}
