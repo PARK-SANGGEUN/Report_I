@@ -260,11 +260,7 @@ export default function App() {
       ds.unshift({label: tabDef.id==="all"?"전체평균":"필터평균",data:sks.map(filterAvg),borderColor:"#1a1d2e",backgroundColor:"rgba(26,29,46,.05)",borderWidth:3,borderDash:[6,3],pointRadius:6,tension:.35,spanGaps:true,fill:true,pointBackgroundColor:"#1a1d2e",pointBorderColor:"#fff",pointBorderWidth:2});
       rTrend.current._c=new window.Chart(rTrend.current,{type:"line",data:{labels:sls,datasets:ds},options:baseOpts(maxLv)});
     }
-    if(rGroup.current){
-      if(rGroup.current._c) rGroup.current._c.destroy();
-      const sc=["#4c6ef5","#6741d9","#2b8a3e","#d97706","#c92a2a","#0c8599"];
-      rGroup.current._c=new window.Chart(rGroup.current,{type:"bar",data:{labels:grps,datasets:sks.slice(0,6).map((sk,i)=>({label:sls[i],data:grps.map(g=>avgOf(sk,g)),backgroundColor:sc[i%sc.length]+"cc",borderColor:sc[i%sc.length],borderWidth:1.5,borderRadius:4}))},options:{...baseOpts(maxLv),plugins:{...baseOpts(maxLv).plugins,legend:{position:"top",labels:{boxWidth:9,font:{size:10},padding:6,usePointStyle:true}}}}});
-    }
+    // 막대 그래프 제거됨 (v19) — 의미 없는 시각화라 삭제
   },[phase,sec,G,graphTab,inMajor]);
 
   const name=G?.studentName||inName||"학생";
@@ -442,52 +438,108 @@ export default function App() {
                 )}
 
                 <div className="grade-section">
-                  {/* 성적표 + 추이 그래프 나란히 */}
+                  {/* 학기별 평균 등급 요약 (탭 필터 반영) */}
+                  {(() => {
+                    if (!G?.grades?.length) return null;
+                    const tabDef = GRAPH_TABS.find(t=>t.id===graphTab) || GRAPH_TABS[0];
+                    let activeGroups;
+                    if (tabDef.filter === null) activeGroups = null;
+                    else if (tabDef.filter === "_major_") activeGroups = getMajorRelatedGroups(inMajor || G?.studentType);
+                    else activeGroups = tabDef.filter;
+
+                    const filtered = activeGroups
+                      ? G.grades.filter(r => activeGroups.includes(r.group))
+                      : G.grades;
+                    if (!filtered.length) return null;
+
+                    const validGrades = filtered.filter(r => parseInt(r.level||0) > 0);
+                    const avg = validGrades.length
+                      ? (validGrades.reduce((s,r)=>s+parseInt(r.level),0)/validGrades.length).toFixed(2)
+                      : "-";
+
+                    // 학기별 평균
+                    const sems = [...new Set(filtered.map(r=>`${r.gN}-${r.sN}`))].sort();
+                    const semAvgs = sems.map(sk => {
+                      const [g,s] = sk.split("-");
+                      const f = filtered.filter(r => String(r.gN)===g && String(r.sN)===s && parseInt(r.level||0)>0);
+                      const a = f.length ? (f.reduce((s,r)=>s+parseInt(r.level),0)/f.length).toFixed(2) : "-";
+                      return { lbl: `${g}학년 ${s}학기`, avg: a, count: f.length };
+                    });
+
+                    return (
+                      <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:14,marginBottom:14}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                          <div>
+                            <div style={{fontSize:11,fontWeight:700,color:"#1e40af",marginBottom:4}}>📊 {tabDef.lbl} 종합</div>
+                            <div style={{fontSize:13,color:"#1e3a8a"}}>이수 과목 <strong>{filtered.length}개</strong> · 평균 등급 <strong style={{fontSize:18,color:"#1e40af"}}>{avg}</strong></div>
+                          </div>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                            {semAvgs.map((s,i)=>(
+                              <div key={i} style={{padding:"6px 12px",background:"#fff",borderRadius:6,border:"1px solid #bfdbfe",fontSize:12}}>
+                                <div style={{color:"#64748b",fontSize:10}}>{s.lbl}</div>
+                                <div style={{fontWeight:700,color:"#1e40af",fontFamily:"'DM Mono',monospace"}}>{s.avg}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* 성적표 + 추이 그래프 나란히 (탭에 따라 표도 필터링) */}
                   <div className="grade-row">
                     <div className="tbl-card">
                       <div style={{padding:"14px 16px 10px",borderBottom:"1px solid var(--border)",fontWeight:700,fontSize:13}}>
-                        📋 학기별 성적표
-                        {graphTab!=="all"&&<span style={{marginLeft:8,fontSize:11,fontWeight:500,color:"var(--ink3)"}}>(전체 과목 표시 · 그래프만 필터됨)</span>}
+                        📋 {GRAPH_TABS.find(t=>t.id===graphTab)?.lbl} 성적표
                       </div>
                       <div className="tbl-scroll">
-                        {G?.grades?.length?(
-                          <table>
-                            <thead><tr><th>학년/학기</th><th>교과군</th><th>과목</th><th>단위</th><th>원점수</th><th>평균(SD)</th><th>등급</th></tr></thead>
-                            <tbody>
-                              {[...G.grades].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN).map((r,i,arr)=>{
-                                const prev=arr[i-1]; const isNew=!prev||prev.gN!==r.gN||prev.sN!==r.sN;
-                                const n=lv(r.level);
-                                return(
-                                  <tr key={i} className={isNew?"sem-sep":""}>
-                                    <td style={{fontWeight:700,whiteSpace:"nowrap",fontSize:13}}>
-                                      <span className={`s-dot ${r.sN===1?"s1":"s2"}`}/>{r.grade} {r.sN}학기
-                                    </td>
-                                    <td style={{fontSize:12,color:"var(--ink3)"}}>{r.group}</td>
-                                    <td style={{fontWeight:600,fontSize:13}}>{r.subject}</td>
-                                    <td style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--ink3)"}}>{r.credit}</td>
-                                    <td style={{fontFamily:"'DM Mono',monospace",fontWeight:700,fontSize:13}}>{r.rawScore}</td>
-                                    <td style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--ink3)"}}>{r.avg}{r.sd?`(${r.sd})`:""}</td>
-                                    <td><span className={`lv${n?" lv"+n:""}`}>{r.level||"·"}</span></td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        ):<Empty msg="성적 데이터 없음"/>}
+                        {(() => {
+                          if (!G?.grades?.length) return <Empty msg="성적 데이터 없음"/>;
+                          const tabDef = GRAPH_TABS.find(t=>t.id===graphTab) || GRAPH_TABS[0];
+                          let activeGroups;
+                          if (tabDef.filter === null) activeGroups = null;
+                          else if (tabDef.filter === "_major_") activeGroups = getMajorRelatedGroups(inMajor || G?.studentType);
+                          else activeGroups = tabDef.filter;
+
+                          const filtered = activeGroups
+                            ? G.grades.filter(r => activeGroups.includes(r.group))
+                            : G.grades;
+                          if (!filtered.length) return <Empty msg={`${tabDef.lbl} 해당 과목 없음`}/>;
+
+                          return (
+                            <table>
+                              <thead><tr><th>학년/학기</th><th>교과군</th><th>과목</th><th>단위</th><th>원점수</th><th>평균(SD)</th><th>등급</th></tr></thead>
+                              <tbody>
+                                {[...filtered].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN).map((r,i,arr)=>{
+                                  const prev=arr[i-1]; const isNew=!prev||prev.gN!==r.gN||prev.sN!==r.sN;
+                                  const n=lv(r.level);
+                                  return(
+                                    <tr key={i} className={isNew?"sem-sep":""}>
+                                      <td style={{fontWeight:700,whiteSpace:"nowrap",fontSize:13}}>
+                                        <span className={`s-dot ${r.sN===1?"s1":"s2"}`}/>{r.grade} {r.sN}학기
+                                      </td>
+                                      <td style={{fontSize:12,color:"var(--ink3)"}}>{r.group}</td>
+                                      <td style={{fontWeight:600,fontSize:13}}>{r.subject}</td>
+                                      <td style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--ink3)"}}>{r.credit}</td>
+                                      <td style={{fontFamily:"'DM Mono',monospace",fontWeight:700,fontSize:13}}>{r.rawScore}</td>
+                                      <td style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--ink3)"}}>{r.avg}{r.sd?`(${r.sd})`:""}</td>
+                                      <td><span className={`lv${n?" lv"+n:""}`}>{r.level||"·"}</span></td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div className="chart-card">
                       <div className="chart-lbl">{GRAPH_TABS.find(t=>t.id===graphTab)?.lbl} 학기별 등급 추이</div>
-                      <div className="chart-sub">{graphTab==="all"?"교과군별 색상":"필터된 교과군만 표시"} · {graphTab==="all"?"전체평균":"필터평균"} 점선</div>
+                      <div className="chart-sub">{graphTab==="all"?"교과군별 색상":"필터된 교과군만 표시"} · 평균선 점선</div>
                       <div style={{height:280}}><canvas ref={rTrend}/></div>
                     </div>
                   </div>
-                  {/* 교과군별 비교 그래프 */}
-                  <div className="chart-card">
-                    <div className="chart-lbl">교과군별 학기 비교</div>
-                    <div style={{height:200}}><canvas ref={rGroup}/></div>
-                  </div>
-                  {/* 성취도 과목 */}
+                  {/* 진로선택 성취도 과목 */}
                   {G?.achievementSubjects?.length>0&&(
                     <div className="tbl-card">
                       <div style={{padding:"14px 16px 10px",borderBottom:"1px solid var(--border)",fontWeight:700,fontSize:13}}>📋 진로선택과목 성취도 (A/B/C — 등급 미산출)</div>
