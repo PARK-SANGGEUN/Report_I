@@ -1,8 +1,8 @@
 // ══════════════════════════════════════════════
-// 리포트아이 — 백엔드 API v21
-// Vercel Pro 활용: max_tokens 16000, 텍스트 90K
-// Gemini 2.5 Pro 1순위
-// 로컬 파서 결과는 AI 비어있을 때만 폴백
+// 리포트아이 — 백엔드 API v22
+// Vercel Pro 활용: max_tokens 16000, 텍스트 50K
+// Gemini 2.5 Flash 1순위 + Flash-Lite 폴백
+// JSON 파싱 4단계 복구 (잘린 응답도 살림)
 // ══════════════════════════════════════════════
 
 export default async function handler(req, res) {
