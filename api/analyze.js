@@ -26,8 +26,9 @@ export default async function handler(req, res) {
   const phaseLbl = phase || 'main';
   console.log(`[v21 ${phaseLbl}] 텍스트: ${(pdfText||'').length}자`);
 
-  const trimText = (pdfText||'').length > 90000
-    ? pdfText.slice(0, 90000) + '\n...(생략)'
+  // 텍스트 한도: 50K (GPT 폴백 시 TPM 한도 30000 고려)
+  const trimText = (pdfText||'').length > 50000
+    ? pdfText.slice(0, 50000) + '\n...(생략)'
     : (pdfText||'');
 
   if (!trimText || trimText.length < 200) {
@@ -78,11 +79,12 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
 
   if (geminiKey) {
     try {
-      console.log(`[${phaseLbl}] Gemini 2.5 Pro 호출`);
+      console.log(`[${phaseLbl}] Gemini 2.5 Flash 호출 (무료 등급 사용 가능 모델)`);
       const fullPrompt = `${systemMsg}\n\n=== 학생부 원문 ===\n${pdfText}\n\n=== 분석 지시 ===\n${prompt}`;
 
+      // 1순위: 2.5 Flash (무료 10 RPM, 250 RPD)
       const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -99,12 +101,15 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
       const d = await r.json();
       if (r.ok) {
         const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        console.log(`[${phaseLbl}] Gemini Pro 성공 (${text.length}자)`);
+        console.log(`[${phaseLbl}] Gemini 2.5 Flash 성공 (${text.length}자)`);
         return parseJSON(text);
       }
-      console.warn(`[${phaseLbl}] Gemini Pro 실패, Flash 폴백`);
+      console.warn(`[${phaseLbl}] 2.5 Flash 실패, Flash-Lite 폴백`);
+      console.warn('Flash 에러:', d.error?.message || JSON.stringify(d).slice(0, 300));
+
+      // 폴백: 2.5 Flash-Lite (무료 15 RPM, 1000 RPD — 가장 큰 한도)
       const r2 = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -121,11 +126,13 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
       const d2 = await r2.json();
       if (r2.ok) {
         const text = d2.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        console.log(`[${phaseLbl}] Gemini Flash 성공`);
+        console.log(`[${phaseLbl}] Flash-Lite 성공 (폴백)`);
         return parseJSON(text);
       }
+      console.warn(`[${phaseLbl}] Flash-Lite도 실패:`, d2.error?.message);
       if (!anthropicKey && !openaiKey) throw new Error(d.error?.message || 'Gemini 실패');
     } catch(e) {
+      console.warn(`[${phaseLbl}] Gemini 예외:`, e.message);
       if (!anthropicKey && !openaiKey) throw e;
     }
   }
