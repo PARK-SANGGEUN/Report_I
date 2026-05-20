@@ -346,5 +346,15 @@ export async function parseAll(b64) {
   const gradeAvg = validGrades.length
     ? (validGrades.reduce((s,r)=>s+parseInt(r.level),0)/validGrades.length).toFixed(2)
     : null;
-  return { text, pages, studentInfo, grades, achievementSubjects, activities, details, opinions, gradeAvg };
+  // App.jsx 호환을 위한 필드명 매핑
+  return {
+    text, pages, studentInfo, grades, achievementSubjects, activities, details, opinions, gradeAvg,
+    rawText: text,                          // App.jsx에서 사용
+    subjectDetails: details,                // App.jsx에서 사용
+    behaviorOpinion: opinions,              // App.jsx에서 사용
+    pageCount: pages.length
+  };
 }
+
+// App.jsx 호환용 별칭 (parseStudentRecord = parseAll)
+export const parseStudentRecord = parseAll;
