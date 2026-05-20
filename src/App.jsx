@@ -54,6 +54,8 @@ export default function App() {
   const [G,setG]=useState(null); const [drag,setDrag]=useState(false); const [busy,setBusy]=useState(false);
   const [sec,setSec]=useState("s1"); const [univTab,setUnivTab]=useState(0);
   const [graphTab,setGraphTab]=useState("all"); // 교과 성적 그래프 탭
+  const [editMode,setEditMode]=useState(false); // 성적표 수동 편집 모드
+  const [editingRow,setEditingRow]=useState(null); // 편집 중인 행 인덱스
   const [inName,setInName]=useState(""); const [inMajor,setInMajor]=useState(""); const [inCurr,setInCurr]=useState("auto");
   const [u0,setU0]=useState(""); const [d0,setD0]=useState("");
   const [u1,setU1]=useState(""); const [d1,setD1]=useState("");
@@ -612,9 +614,27 @@ export default function App() {
                   {/* 성적표 + 추이 그래프 나란히 (탭에 따라 표도 필터링) */}
                   <div className="grade-row">
                     <div className="tbl-card">
-                      <div style={{padding:"14px 16px 10px",borderBottom:"1px solid var(--border)",fontWeight:700,fontSize:13}}>
-                        📋 {GRAPH_TABS.find(t=>t.id===graphTab)?.lbl} 성적표
+                      <div style={{padding:"14px 16px 10px",borderBottom:"1px solid var(--border)",fontWeight:700,fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <span>📋 {GRAPH_TABS.find(t=>t.id===graphTab)?.lbl} 성적표</span>
+                        <button
+                          onClick={()=>{setEditMode(!editMode);setEditingRow(null);}}
+                          style={{
+                            padding:"4px 10px",
+                            fontSize:11,
+                            fontWeight:600,
+                            background:editMode?"#dc2626":"#4c6ef5",
+                            color:"#fff",
+                            border:"none",
+                            borderRadius:4,
+                            cursor:"pointer"
+                          }}
+                        >{editMode?"✅ 편집 완료":"✏️ 직접 수정"}</button>
                       </div>
+                      {editMode && (
+                        <div style={{padding:"8px 16px",background:"#fef3c7",borderBottom:"1px solid var(--border)",fontSize:11,color:"#92400e"}}>
+                          💡 학기/과목/등급 등을 직접 수정할 수 있어요. 행을 클릭하여 편집하거나, 아래 + 버튼으로 행을 추가하세요.
+                        </div>
+                      )}
                       <div className="tbl-scroll">
                         {(() => {
                           if (!G?.grades?.length) return <Empty msg="성적 데이터 없음"/>;
@@ -624,20 +644,94 @@ export default function App() {
                           else if (tabDef.filter === "_major_") activeGroups = getMajorRelatedGroups(inMajor || G?.studentType);
                           else activeGroups = tabDef.filter;
 
-                          const filtered = activeGroups
-                            ? G.grades.filter(r => activeGroups.includes(r.group))
-                            : G.grades;
+                          // 편집 모드에서는 모든 데이터 표시 (필터 무시)
+                          const filtered = editMode
+                            ? G.grades
+                            : (activeGroups ? G.grades.filter(r => activeGroups.includes(r.group)) : G.grades);
                           if (!filtered.length) return <Empty msg={`${tabDef.lbl} 해당 과목 없음`}/>;
+
+                          const sortedAll = [...filtered].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN);
+                          // 원본 인덱스 매핑 (편집 시 사용)
+                          const indexMap = sortedAll.map(item => G.grades.findIndex(g => g === item));
 
                           return (
                             <table>
-                              <thead><tr><th>학년/학기</th><th>교과군</th><th>과목</th><th>단위</th><th>원점수</th><th>평균(SD)</th><th>등급</th></tr></thead>
+                              <thead><tr><th>학년/학기</th><th>교과군</th><th>과목</th><th>단위</th><th>원점수</th><th>평균(SD)</th><th>등급</th>{editMode && <th>삭제</th>}</tr></thead>
                               <tbody>
-                                {[...filtered].sort((a,b)=>a.gN!==b.gN?a.gN-b.gN:a.sN-b.sN).map((r,i,arr)=>{
+                                {sortedAll.map((r,i,arr)=>{
                                   const prev=arr[i-1]; const isNew=!prev||prev.gN!==r.gN||prev.sN!==r.sN;
                                   const n=lv(r.level);
+                                  const realIdx = indexMap[i];
+                                  const isEditing = editMode && editingRow === realIdx;
+
+                                  if (isEditing) {
+                                    return (
+                                      <tr key={`edit-${i}`} style={{background:"#fef3c7"}}>
+                                        <td>
+                                          <select value={`${r.gN}-${r.sN}`} onChange={e=>{
+                                            const[g,s]=e.target.value.split("-");
+                                            const newG=[...G.grades];
+                                            newG[realIdx]={...newG[realIdx],gN:parseInt(g),sN:parseInt(s),grade:`${g}학년`,semester:`${s}학기`};
+                                            setG({...G,grades:newG});
+                                          }} style={{fontSize:12,padding:4,width:"100%"}}>
+                                            <option value="1-1">1학년 1학기</option>
+                                            <option value="1-2">1학년 2학기</option>
+                                            <option value="2-1">2학년 1학기</option>
+                                            <option value="2-2">2학년 2학기</option>
+                                            <option value="3-1">3학년 1학기</option>
+                                            <option value="3-2">3학년 2학기</option>
+                                          </select>
+                                        </td>
+                                        <td>
+                                          <select value={r.group||"기타"} onChange={e=>{
+                                            const newG=[...G.grades];
+                                            newG[realIdx]={...newG[realIdx],group:e.target.value};
+                                            setG({...G,grades:newG});
+                                          }} style={{fontSize:12,padding:4,width:"100%"}}>
+                                            <option value="국어">국어</option>
+                                            <option value="수학">수학</option>
+                                            <option value="영어">영어</option>
+                                            <option value="사회">사회</option>
+                                            <option value="과학">과학</option>
+                                            <option value="기술가정">기술가정</option>
+                                            <option value="예체능">예체능</option>
+                                            <option value="기타">기타</option>
+                                          </select>
+                                        </td>
+                                        <td><input type="text" value={r.subject||""} onChange={e=>{
+                                          const newG=[...G.grades];
+                                          newG[realIdx]={...newG[realIdx],subject:e.target.value};
+                                          setG({...G,grades:newG});
+                                        }} style={{fontSize:12,padding:4,width:"100%"}}/></td>
+                                        <td><input type="text" value={r.credit||""} onChange={e=>{
+                                          const newG=[...G.grades];
+                                          newG[realIdx]={...newG[realIdx],credit:e.target.value};
+                                          setG({...G,grades:newG});
+                                        }} style={{fontSize:12,padding:4,width:50}}/></td>
+                                        <td><input type="text" value={r.rawScore||""} onChange={e=>{
+                                          const newG=[...G.grades];
+                                          newG[realIdx]={...newG[realIdx],rawScore:e.target.value};
+                                          setG({...G,grades:newG});
+                                        }} style={{fontSize:12,padding:4,width:60}}/></td>
+                                        <td><input type="text" value={r.avg||""} onChange={e=>{
+                                          const newG=[...G.grades];
+                                          newG[realIdx]={...newG[realIdx],avg:e.target.value};
+                                          setG({...G,grades:newG});
+                                        }} style={{fontSize:12,padding:4,width:60}} placeholder="평균"/></td>
+                                        <td><input type="number" min="1" max="9" value={r.level||""} onChange={e=>{
+                                          const newG=[...G.grades];
+                                          newG[realIdx]={...newG[realIdx],level:parseInt(e.target.value)||0};
+                                          setG({...G,grades:newG});
+                                        }} style={{fontSize:12,padding:4,width:50,fontWeight:700}}/></td>
+                                        <td>
+                                          <button onClick={()=>setEditingRow(null)} style={{padding:"2px 8px",fontSize:11,background:"#10b981",color:"#fff",border:"none",borderRadius:3,cursor:"pointer"}}>확인</button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  }
+
                                   return(
-                                    <tr key={i} className={isNew?"sem-sep":""}>
+                                    <tr key={i} className={isNew?"sem-sep":""} onClick={()=>editMode&&setEditingRow(realIdx)} style={{cursor:editMode?"pointer":"default"}}>
                                       <td style={{fontWeight:700,whiteSpace:"nowrap",fontSize:13}}>
                                         <span className={`s-dot ${r.sN===1?"s1":"s2"}`}/>{r.grade} {r.sN}학기
                                       </td>
@@ -647,9 +741,33 @@ export default function App() {
                                       <td style={{fontFamily:"'DM Mono',monospace",fontWeight:700,fontSize:13}}>{r.rawScore}</td>
                                       <td style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--ink3)"}}>{r.avg}{r.sd?`(${r.sd})`:""}</td>
                                       <td><span className={`lv${n?" lv"+n:""}`}>{r.level||"·"}</span></td>
+                                      {editMode && (
+                                        <td>
+                                          <button onClick={(e)=>{
+                                            e.stopPropagation();
+                                            if(confirm("이 행을 삭제하시겠습니까?")){
+                                              const newG=G.grades.filter((_,idx)=>idx!==realIdx);
+                                              setG({...G,grades:newG});
+                                              setEditingRow(null);
+                                            }
+                                          }} style={{padding:"2px 6px",fontSize:11,background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:3,cursor:"pointer"}}>×</button>
+                                        </td>
+                                      )}
                                     </tr>
                                   );
                                 })}
+                                {editMode && (
+                                  <tr>
+                                    <td colSpan="8" style={{textAlign:"center",padding:8}}>
+                                      <button onClick={()=>{
+                                        const newRow={grade:"2학년",semester:"1학기",gN:2,sN:1,subject:"새과목",credit:"3",rawScore:"",avg:"",sd:"",level:1,group:"국어"};
+                                        const newG=[...G.grades,newRow];
+                                        setG({...G,grades:newG});
+                                        setEditingRow(newG.length-1);
+                                      }} style={{padding:"6px 14px",fontSize:12,background:"#10b981",color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:600}}>+ 행 추가</button>
+                                    </td>
+                                  </tr>
+                                )}
                               </tbody>
                             </table>
                           );
@@ -1284,7 +1402,19 @@ export default function App() {
             {/* S12 종합 리포트 */}
             {sec==="s12"&&(
               <div>
-                <PH eye="종합 리포트" title="정밀 분석 종합 리포트" sub={`${G?.schoolName||""} · ${name} 학생 · 10페이지 장문 분석`}/>
+                <PH eye="종합 리포트" title="정밀 분석 종합 리포트" sub={`${G?.schoolName||""} · ${name} 학생 · 모든 탭 종합`}/>
+
+                {/* 활용 안내 (신규) */}
+                <div style={{background:"linear-gradient(135deg,#eff6ff,#dbeafe)",border:"1px solid #93c5fd",borderRadius:12,padding:18,marginBottom:18}}>
+                  <div style={{fontSize:13,fontWeight:800,color:"#1e40af",marginBottom:8}}>📖 종합 리포트 활용 가이드</div>
+                  <div style={{fontSize:13,lineHeight:1.8,color:"#1e3a8a"}}>
+                    이 리포트는 <strong>모든 탭의 분석을 종합</strong>한 결과입니다. 활용 방법:<br/>
+                    • <strong>자기소개서 작성</strong>: 강점·핵심 활동·역량 평가를 참고해 글감 정리<br/>
+                    • <strong>면접 준비</strong>: 면접 질문 탭과 함께 활용, 본 리포트의 키워드 숙지<br/>
+                    • <strong>학기 계획</strong>: 부족한 부분·액션 플랜으로 남은 학기 활동 설계<br/>
+                    • <strong>학부모 상담</strong>: 객관적 진단 자료로 제시
+                  </div>
+                </div>
 
                 {/* 메타 정보 */}
                 <div className="g4" style={{marginBottom:18}}>
@@ -1314,9 +1444,9 @@ export default function App() {
                       <div style={{marginTop:5,fontSize:14,color:"#748ffc"}}>{total}점 · {grd}등급</div>
                     </div>
                   </div>
-                  <div className="letter-body" style={{whiteSpace:"pre-wrap",lineHeight:1.9}}>{G?.reportLetter||"분析 실행 후 생성됩니다."}</div>
+                  <div className="letter-body" style={{whiteSpace:"pre-wrap",lineHeight:1.9}}>{G?.reportLetter||"분석 실행 후 생성됩니다."}</div>
                   <div className="letter-ft">
-                    <div className="letter-sig">리포트아이 분析팀 드림</div>
+                    <div className="letter-sig">리포트아이 분석팀 드림</div>
                     <div style={{display:"flex",gap:9}}>
                       <button className="btn-act" onClick={()=>navigator.clipboard?.writeText(G?.reportLetter||"").then(()=>alert("복사됐습니다"))}>📋 복사</button>
                       <button className="btn-act" onClick={()=>window.print()}>🖨 PDF 출력</button>
@@ -1324,22 +1454,23 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ─── 부록 1: 역량 채점 요약 ─── */}
+                {/* ─── 부록 1: 역량 채점 요약 (강화) ─── */}
                 {G?.competencies&&(
                   <div className="card" style={{marginTop:20}}>
-                    <div className="card-eye">📊 부록 1. 역량 채점 요약</div>
+                    <div className="card-eye">📊 부록 1. 역량 채점 요약 (5개 역량)</div>
                     <table className="sum-tbl" style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                       <thead><tr><th>역량</th><th>등급</th><th>점수</th><th>비율</th><th>핵심 근거</th></tr></thead>
                       <tbody>
                         {COMP.map(cm=>{
                           const d=G.competencies[cm.k]||{}; const gc=GC[d.grade||"C"]||"#868e96";
+                          const firstEv = (d.evidenceList && d.evidenceList[0]) || d.evidence || "";
                           return(
                             <tr key={cm.k}>
                               <td style={{fontWeight:700,padding:"11px 14px",borderBottom:"1px solid var(--border)"}}>{cm.n}</td>
                               <td style={{padding:"11px 14px",borderBottom:"1px solid var(--border)"}}><span style={{background:gc+"18",color:gc,padding:"3px 10px",borderRadius:3,fontWeight:800,fontSize:13,border:`1px solid ${gc}30`}}>{d.grade||"?"}</span></td>
                               <td style={{fontFamily:"'DM Mono',monospace",fontWeight:700,padding:"11px 14px",borderBottom:"1px solid var(--border)"}}>{d.score||0}/{cm.max}</td>
                               <td style={{color:"var(--ink3)",padding:"11px 14px",borderBottom:"1px solid var(--border)"}}>{cm.max}%</td>
-                              <td style={{fontSize:12,color:"var(--ink3)",fontStyle:"italic",maxWidth:220,padding:"11px 14px",borderBottom:"1px solid var(--border)"}}>{(d.evidence||"").slice(0,80)}{d.evidence?.length>80?"…":""}</td>
+                              <td style={{fontSize:12,color:"var(--ink3)",fontStyle:"italic",maxWidth:220,padding:"11px 14px",borderBottom:"1px solid var(--border)"}}>{firstEv.slice(0,80)}{firstEv.length>80?"…":""}</td>
                             </tr>
                           );
                         })}
