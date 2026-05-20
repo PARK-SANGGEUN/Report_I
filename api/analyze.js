@@ -195,11 +195,79 @@ async function callAI({ geminiKey, anthropicKey, openaiKey, pdfText, prompt, max
 }
 
 function parseJSON(text) {
-  const cleaned = String(text).replace(/```json|```/g, '').trim();
-  try { return JSON.parse(cleaned); }
-  catch {
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (m) try { return JSON.parse(m[0]); } catch {}
-    return {};
+  if (!text || typeof text !== 'string') return {};
+  
+  // 1단계: 마크다운 제거
+  let cleaned = String(text).replace(/```json|```/g, '').trim();
+  
+  // 2단계: 정상 파싱 시도
+  try {
+    const result = JSON.parse(cleaned);
+    console.log('[parseJSON] 1차 성공:', Object.keys(result).length, '개 키');
+    return result;
+  } catch (e1) {
+    console.warn('[parseJSON] 1차 실패:', e1.message?.slice(0, 100));
   }
+  
+  // 3단계: { } 구간만 추출
+  const m = cleaned.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const result = JSON.parse(m[0]);
+      console.log('[parseJSON] 2차 성공:', Object.keys(result).length, '개 키');
+      return result;
+    } catch (e2) {
+      console.warn('[parseJSON] 2차 실패:', e2.message?.slice(0, 100));
+    }
+  }
+  
+  // 4단계: 잘린 JSON 복구 시도 (Gemini가 출력 한도로 끊긴 경우)
+  try {
+    let json = cleaned;
+    // 마지막 완성된 } 위치 찾기
+    let depth = 0, lastValid = -1, inString = false, escape = false;
+    for (let i = 0; i < json.length; i++) {
+      const c = json[i];
+      if (escape) { escape = false; continue; }
+      if (c === '\\') { escape = true; continue; }
+      if (c === '"' && !escape) { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') {
+        depth--;
+        if (depth === 0) lastValid = i;
+      }
+    }
+    
+    // 끊긴 경우 — 마지막 valid 위치까지 + 닫는 괄호 추가
+    if (depth > 0) {
+      // 마지막 ", "} 등 깨진 부분 찾아 정리
+      let truncated = json;
+      // 마지막 쉼표 뒤 미완성 부분 제거
+      const lastComma = truncated.lastIndexOf(',');
+      const lastBrace = truncated.lastIndexOf('}');
+      const lastBracket = truncated.lastIndexOf(']');
+      const cutPoint = Math.max(lastBrace, lastBracket);
+      if (cutPoint > 0) {
+        truncated = truncated.slice(0, cutPoint + 1);
+        // 깊이만큼 닫는 괄호 추가
+        // (실제로는 stack 추적이 더 정확하지만 일단 단순화)
+        while (depth > 0) { truncated += '}'; depth--; }
+        try {
+          const result = JSON.parse(truncated);
+          console.log('[parseJSON] 잘린 JSON 복구 성공:', Object.keys(result).length, '개 키');
+          return result;
+        } catch (e3) {
+          console.warn('[parseJSON] 복구 실패:', e3.message?.slice(0, 100));
+        }
+      }
+    }
+  } catch (eFix) {
+    console.warn('[parseJSON] 복구 시도 예외:', eFix.message?.slice(0, 100));
+  }
+  
+  // 5단계: 모든 시도 실패 — 텍스트 일부 출력 후 빈 객체
+  console.error('[parseJSON] 모든 파싱 실패. 응답 첫 500자:', cleaned.slice(0, 500));
+  console.error('[parseJSON] 응답 마지막 300자:', cleaned.slice(-300));
+  return {};
 }
