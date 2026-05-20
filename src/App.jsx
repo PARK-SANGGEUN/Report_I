@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { buildPhase1Prompt, buildPhase2Prompt } from "./criteria.js";
 import { parseStudentRecord } from "./parser.js";
 import { diagnoseUnivFit, SUPPORTED_UNIVS } from "./univCriteria.js";
+import { REGIONS, REGION_UNIVS, getDeptsForUniv } from "./regionUnivDept.js";
+import { getBooksForDept, searchBooks } from "./recommendedBooks.js";
 import "./App.css";
 
 const UNIVS = ["강원대학교","건국대학교","경기대학교","경북대학교","경희대학교","고려대학교","광운대학교","국민대학교","단국대학교","덕성여자대학교","동국대학교","부산대학교","서강대학교","서울과학기술대학교","서울대학교","서울시립대학교","성균관대학교","세종대학교","숙명여자대학교","숭실대학교","아주대학교","연세대학교","이화여자대학교","인하대학교","중앙대학교","한국외국어대학교","한양대학교","홍익대학교"];
@@ -380,21 +382,64 @@ export default function App() {
         </div>
         <div style={{marginBottom:28}}>
           <div className="f-eye" style={{marginBottom:6}}>Step 2 — 지원 희망 대학 (선택사항)</div>
-          <p className="f-desc" style={{marginBottom:14}}>최대 3순위까지 입력하면 대학별 맞춤 진단을 드립니다. 비워두셔도 됩니다.</p>
+          <p className="f-desc" style={{marginBottom:14}}>지역 → 대학 → 학과 순으로 선택하면 권장과목 충족률 분석이 가능합니다. 최대 3순위까지.</p>
           <div className="univ-rows">
-            {[[u0,setU0,d0,setD0,sg0,setSg0,op0,setOp0],[u1,setU1,d1,setD1,sg1,setSg1,op1,setOp1],[u2,setU2,d2,setD2,sg2,setSg2,op2,setOp2]].map(([u,setU,d,setD,sg,setSg,op,setOp],i)=>(
-              <div key={i} className="univ-row">
-                <div className={`u-num u${i+1}`}>{i+1}</div>
-                <div className="dd-wrap">
-                  <input className="f-input" placeholder={`${i+1}순위 대학`} value={u} autoComplete="off"
-                    onChange={e=>{const v=e.target.value;setU(v);setSg(v.length>=1?UNIVS.filter(x=>x.includes(v)).slice(0,6):[]);setOp(true);}}
-                    onFocus={()=>{setSg(u.length>=1?UNIVS.filter(x=>x.includes(u)).slice(0,6):[]);setOp(true);}}
-                    onBlur={()=>setTimeout(()=>setOp(false),180)}/>
-                  {op&&sg.length>0&&<div className="u-dd">{sg.map((x,j)=><div key={j} className="u-opt" onMouseDown={()=>{setU(x);setSg([]);setOp(false);}}>{x}</div>)}</div>}
+            {[[u0,setU0,d0,setD0,sg0,setSg0,op0,setOp0],[u1,setU1,d1,setD1,sg1,setSg1,op1,setOp1],[u2,setU2,d2,setD2,sg2,setSg2,op2,setOp2]].map(([u,setU,d,setD,sg,setSg,op,setOp],i)=>{
+              // 지역 상태 (sg를 [region]으로 활용)
+              const region = sg[0] || "";
+              const setRegion = (r) => { setSg([r]); setU(""); setD(""); };
+              const availUnivs = region ? (REGION_UNIVS[region]||[]) : [];
+              const availDepts = u ? getDeptsForUniv(u) : [];
+
+              return (
+                <div key={i} style={{display:"grid",gridTemplateColumns:"24px 1fr 1.5fr 2fr",gap:8,alignItems:"center",marginBottom:10}}>
+                  <div className={`u-num u${i+1}`}>{i+1}</div>
+                  {/* 지역 선택 */}
+                  <select
+                    value={region}
+                    onChange={e=>setRegion(e.target.value)}
+                    style={{padding:"10px 12px",fontSize:13,border:"1px solid var(--border)",borderRadius:8,background:"#fff",color:region?"var(--ink)":"var(--ink3)",cursor:"pointer"}}
+                  >
+                    <option value="">지역 선택</option>
+                    {REGIONS.map(r=><option key={r} value={r}>{r}</option>)}
+                  </select>
+                  {/* 대학 선택 */}
+                  <select
+                    value={u}
+                    onChange={e=>{setU(e.target.value);setD("");}}
+                    disabled={!region}
+                    style={{padding:"10px 12px",fontSize:13,border:"1px solid var(--border)",borderRadius:8,background:region?"#fff":"#f8f9fa",color:u?"var(--ink)":"var(--ink3)",cursor:region?"pointer":"not-allowed"}}
+                  >
+                    <option value="">{region?"대학 선택":"먼저 지역을 선택하세요"}</option>
+                    {availUnivs.map(x=><option key={x} value={x}>{x}</option>)}
+                  </select>
+                  {/* 학과 — 드롭다운 + 자유 입력 */}
+                  <div style={{position:"relative"}}>
+                    <input
+                      className="f-input"
+                      placeholder={u?"학과 입력 또는 클릭":"먼저 대학을 선택하세요"}
+                      value={d}
+                      onChange={e=>{setD(e.target.value);setOp(true);}}
+                      onFocus={()=>setOp(true)}
+                      onBlur={()=>setTimeout(()=>setOp(false),180)}
+                      disabled={!u}
+                      autoComplete="off"
+                      style={{background:u?"#fff":"#f8f9fa"}}
+                    />
+                    {op && u && availDepts.length>0 && (
+                      <div className="u-dd" style={{maxHeight:240,overflowY:"auto"}}>
+                        {availDepts
+                          .filter(x => !d || x.toLowerCase().includes(d.toLowerCase()))
+                          .slice(0,15)
+                          .map((x,j)=>(
+                            <div key={j} className="u-opt" onMouseDown={()=>{setD(x);setOp(false);}}>{x}</div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <input className="f-input" placeholder="학과" value={d} autoComplete="off" onChange={e=>setD(e.target.value)}/>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         <div className="cta-wrap">
@@ -835,12 +880,41 @@ export default function App() {
             {/* S2 이수현황 */}
             {sec==="s2"&&(
               <div>
-                <PH eye="이수 분析" title="교과 이수 현황" sub="지원 희망 대학별 권장과목 충족 분석"/>
+                <PH eye="이수 분석" title="교과 이수 현황" sub="지원 희망 대학별 권장과목 + 이수 과목 기반 추천 학과"/>
 
                 {/* 종합 평가 */}
                 {G?.creditStatus?.summary&&(
                   <div className="info-note blue" style={{marginBottom:18,fontSize:14,lineHeight:1.7}}>
                     📊 <strong>종합 평가:</strong> {G.creditStatus.summary}
+                  </div>
+                )}
+
+                {/* 🆕 이수 과목 기반 추천 학과 TOP 5 */}
+                {G?.recommendedMajors?.length > 0 && (
+                  <div style={{marginBottom:24}}>
+                    <h3 style={{fontSize:16,fontWeight:700,marginBottom:10}}>🏆 이수 과목 기반 추천 학과 TOP 5</h3>
+                    <p style={{fontSize:13,color:"var(--ink3)",marginBottom:14}}>본인의 이수 과목·성적·활동을 기반으로 적합한 학과를 추천합니다 (지원 희망 대학과 무관)</p>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12}}>
+                      {G.recommendedMajors.slice(0,5).map((r,i)=>(
+                        <div key={i} style={{display:"flex",gap:14,padding:14,background:"#fff",border:"1px solid var(--border)",borderLeft:`4px solid ${TC[i%TC.length]}`,borderRadius:8}}>
+                          <div style={{width:36,height:36,borderRadius:8,background:TC[i%TC.length],color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:16,flexShrink:0}}>{i+1}</div>
+                          <div style={{flex:1}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                              <div style={{fontSize:15,fontWeight:700}}>{r.major}</div>
+                              <div style={{fontSize:18,fontWeight:800,color:TC[i%TC.length],fontFamily:"'DM Mono',monospace"}}>{r.score||"-"}<span style={{fontSize:11}}>점</span></div>
+                            </div>
+                            <div style={{fontSize:13,lineHeight:1.7,color:"var(--ink2)",marginBottom:6}}>{r.reason}</div>
+                            {r.matchedSubjects?.length>0 && (
+                              <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>
+                                {r.matchedSubjects.slice(0,5).map((s,j)=>(
+                                  <span key={j} style={{padding:"2px 8px",background:TC[i%TC.length]+"15",color:TC[i%TC.length],borderRadius:99,fontSize:11,fontWeight:600}}>{s}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -1341,6 +1415,37 @@ export default function App() {
                               난이도: {t.difficulty}
                             </div>
                           )}
+
+                          {/* 🆕 추천 도서 — AI 추천 + 학과별 자동 매칭 */}
+                          {(() => {
+                            const aiBooks = t.recommendedBooks || [];
+                            const deptBooks = t.forMajor ? getBooksForDept(t.forMajor, 5) : [];
+                            if (aiBooks.length === 0 && deptBooks.length === 0) return null;
+                            return (
+                              <div style={{marginTop:12,padding:12,background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8}}>
+                                <div style={{fontSize:11,fontWeight:700,color:"#78350f",marginBottom:8}}>📚 관련 추천도서</div>
+                                {aiBooks.length > 0 && (
+                                  <div style={{marginBottom:deptBooks.length>0?8:0}}>
+                                    {aiBooks.map((b,j)=>(
+                                      <div key={j} style={{fontSize:12,color:"#92400e",lineHeight:1.6}}>• {b}</div>
+                                    ))}
+                                  </div>
+                                )}
+                                {deptBooks.length > 0 && (
+                                  <details>
+                                    <summary style={{fontSize:11,fontWeight:600,color:"#78350f",cursor:"pointer"}}>📖 {t.forMajor} 관련 추천도서 더보기 ({deptBooks.length}권)</summary>
+                                    <div style={{marginTop:6,paddingTop:6,borderTop:"1px dashed #fbbf24"}}>
+                                      {deptBooks.map((b,j)=>(
+                                        <div key={j} style={{fontSize:12,color:"#92400e",lineHeight:1.6,padding:"2px 0"}}>
+                                          • <strong>{b.t}</strong> — {b.a} ({b.p}, {b.y})
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     ))}
